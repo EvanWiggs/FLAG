@@ -1,0 +1,583 @@
+"""
+Food Detector Module
+
+This module handles all computer vision and detection functionality
+using TensorFlow and OpenCV to identify food items in the video stream.
+"""
+
+import os
+import logging
+import time
+import threading
+import queue
+import urllib.request
+import zipfile
+from typing import Dict, List, Tuple, Optional, Set
+
+import cv2
+import numpy as np
+import tensorflow as tf
+
+logger = logging.getLogger(__name__)
+
+# Default paths for models
+MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+DEFAULT_MODEL_PATH = os.path.join(MODEL_DIR, 'efficientdet_lite0_food')
+
+# Food detection class mappings
+# This maps model output class IDs to actual food ingredients
+# In a real system, you would have a more comprehensive mapping
+# Food detection class mappings
+# Maps COCO dataset classes to food ingredients
+FOOD_CLASS_MAPPING = {
+    1: 'person',   # For detection testing
+    2: 'bicycle',
+    3: 'car',
+    4: 'motorcycle',
+    5: 'airplane',
+    6: 'bus',
+    7: 'train',
+    8: 'truck',
+    9: 'boat',
+    10: 'traffic light',
+    13: 'stop sign',
+    14: 'parking meter',
+    15: 'bench',
+    16: 'bird',
+    17: 'cat',
+    18: 'dog',
+    19: 'horse',
+    20: 'sheep',
+    21: 'cow',           # Map to "beef"
+    22: 'elephant',
+    23: 'bear',
+    24: 'zebra',
+    25: 'giraffe',
+    27: 'backpack',
+    28: 'umbrella',
+    31: 'handbag',
+    32: 'tie',
+    33: 'suitcase',
+    34: 'frisbee',
+    35: 'skis',
+    36: 'snowboard',
+    37: 'sports ball',
+    38: 'kite',
+    39: 'baseball bat',
+    40: 'baseball glove',
+    41: 'skateboard',
+    42: 'surfboard',
+    43: 'tennis racket',
+    44: 'bottle',
+    46: 'wine glass',
+    47: 'cup',
+    48: 'fork',
+    49: 'knife',
+    50: 'spoon',
+    51: 'bowl',
+    52: 'banana',        # Actual food items start here
+    53: 'apple',
+    54: 'sandwich',      # Map to "bread"
+    55: 'orange',
+    56: 'broccoli',
+    57: 'carrot',
+    58: 'hot dog',
+    59: 'pizza',
+    60: 'donut',
+    61: 'cake',
+    62: 'chair',
+    63: 'couch',
+    64: 'potted plant',
+    65: 'bed',
+    67: 'dining table',
+    70: 'toilet',
+    72: 'tv',
+    73: 'laptop',
+    74: 'mouse',
+    75: 'remote',
+    76: 'keyboard',
+    77: 'cell phone',
+    78: 'microwave',
+    79: 'oven',
+    80: 'toaster',
+    81: 'sink',
+    82: 'refrigerator',
+    84: 'book',
+    85: 'clock',
+    86: 'vase',
+    87: 'scissors',
+    88: 'teddy bear',
+    89: 'hair drier',
+    90: 'toothbrush',
+}
+
+# Map COCO classes to our food ingredients
+FOOD_INGREDIENT_MAPPING = {
+    52: 'banana',      # COCO class: banana → ingredient: banana
+    53: 'apple',       # COCO class: apple → ingredient: apple
+    54: 'bread',       # COCO class: sandwich → ingredient: bread
+    56: 'broccoli',    # COCO class: broccoli → ingredient: broccoli
+    57: 'carrot',      # COCO class: carrot → ingredient: carrot
+    58: 'sausage',     # COCO class: hot dog → ingredient: sausage
+    21: 'beef',        # COCO class: cow → ingredient: beef
+    59: 'pizza',       # COCO class: pizza → ingredient: pizza
+    60: 'donut',       # COCO class: donut → ingredient: donut
+    61: 'cake',        # COCO class: cake → ingredient: cake
+    47: 'drink',       # COCO class: cup → ingredient: drink
+    44: 'sauce',       # COCO class: bottle → ingredient: sauce
+    # Add more mappings as needed
+}
+
+
+class DetectionResult:
+    """Class representing a detection result."""
+    
+    def __init__(self, 
+                 class_id: int, 
+                 class_name: str, 
+                 confidence: float, 
+                 box: Tuple[int, int, int, int]):
+        """
+        Initialize a detection result.
+        
+        Args:
+            class_id: Numeric ID of the detected class
+            class_name: Name of the detected class/ingredient
+            confidence: Confidence score (0.0-1.0)
+            box: Bounding box coordinates (x, y, width, height)
+        """
+        self.class_id = class_id
+        self.class_name = class_name
+        self.confidence = confidence
+        self.box = box  # (x, y, width, height)
+    
+    def __repr__(self):
+        return f"DetectionResult({self.class_name}, {self.confidence:.2f}, {self.box})"
+
+
+class FoodDetector:
+    """
+    Food Detector class responsible for detecting food items using computer vision.
+    """
+    
+    def __init__(self,
+                 model_type: str = 'default',
+                 model_path: Optional[str] = None,
+                 confidence_threshold: float = 0.6,
+                 max_queue_size: int = 5):
+        """
+        Initialize the food detector.
+        
+        Args:
+            model_type: Type of model to use ('default', 'efficientdet', 'yolo')
+            model_path: Path to custom model weights (if not using default)
+            confidence_threshold: Minimum confidence score for detections (0.0-1.0)
+            max_queue_size: Maximum size of the processing queue
+        """
+        self.model_type = model_type
+        self.model_path = model_path if model_path else DEFAULT_MODEL_PATH
+        self.confidence_threshold = confidence_threshold
+        
+        # Create directories if they don't exist
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        
+        # Initialize state variables
+        self.is_running = False
+        self.model = None
+        self.frame_queue = queue.Queue(maxsize=max_queue_size)
+        self.result_queue = queue.Queue(maxsize=max_queue_size)
+        self.processing_thread = None
+        
+        # Load the detection model
+        self._load_model()
+    
+    def _load_model(self):
+        """Load the appropriate object detection model."""
+        if not os.path.exists(self.model_path):
+            logger.info(f"Model not found at {self.model_path}, attempting to download...")
+            self._download_model()
+        
+        try:
+            logger.info(f"Loading model from {self.model_path}")
+            
+            # Load model with TensorFlow 2.19.0 approach
+            import tensorflow as tf
+            self.model = tf.saved_model.load(self.model_path)
+            
+            # Get the concrete function
+            self.detect_fn = self.model.signatures['serving_default']
+            
+            # Test the model with a dummy image
+            dummy_image = np.zeros((300, 300, 3), dtype=np.uint8)
+            self._run_inference_for_single_image(dummy_image)
+            
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            raise
+
+    def _simple_detect_fn(self, input_tensor):
+            """Simple detection function that works without a real model.
+            This allows the app to run for demonstration purposes."""
+            import numpy as np
+            
+            # Create sample detection results for demonstration
+            batch_size = 1
+            num_detections = 3
+            
+            # Sample detections: bread, chicken, and maybe pickle
+            use_pickle = np.random.random() > 0.5
+            
+            classes = np.array([[1, 2, 7 if use_pickle else 3]])  # bread, chicken, pickle or beef
+            scores = np.array([[0.95, 0.9, 0.85]])
+            boxes = np.array([
+                [[0.2, 0.1, 0.3, 0.2],  # y1, x1, y2, x2 (normalized)
+                [0.4, 0.3, 0.6, 0.5],
+                [0.6, 0.7, 0.7, 0.8]]
+            ])
+            
+            return {
+                'num_detections': np.array([num_detections]),
+                'detection_classes': classes,
+                'detection_scores': scores,
+                'detection_boxes': boxes
+            }
+            
+    def _download_model(self):
+        """Download the model if it doesn't exist."""
+        logger.info("Downloading model...")
+        os.makedirs(self.model_path, exist_ok=True)
+        
+        # URL for the EfficientDet Lite0 model pre-trained on COCO
+        # In a real implementation, you would want a model fine-tuned on food items
+        model_url = "https://tfhub.dev/tensorflow/efficientdet/lite0/feature-vector/1?tf-hub-format=compressed"
+        
+        try:
+            # Download the model
+            zip_path = os.path.join(MODEL_DIR, 'model.zip')
+            urllib.request.urlretrieve(model_url, zip_path)
+            
+            # Extract the model
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(self.model_path)
+            
+            # Clean up
+            os.remove(zip_path)
+            logger.info(f"Model downloaded and extracted to {self.model_path}")
+        except Exception as e:
+            logger.error(f"Failed to download model: {e}")
+            raise
+    
+    def _run_inference_for_single_image(self, image):
+        """
+        Run inference for a single image.
+        
+        Args:
+            image: Input image as numpy array (H, W, 3)
+            
+        Returns:
+            Dictionary of detection results
+        """
+        # Convert to tensor
+        import tensorflow as tf
+        input_tensor = tf.convert_to_tensor(image)
+        
+        # Add batch dimension
+        input_tensor = input_tensor[tf.newaxis, ...]
+        
+        # Run inference
+        output_dict = self.detect_fn(input_tensor)
+        
+        # TF 2.19.0 returns different structure
+        output_dict = {key: value.numpy() for key, value in output_dict.items()}
+        
+        # Special handling for TF 2.19.0 detection model output
+        if 'detection_boxes' in output_dict:
+            num_detections = int(len(output_dict['detection_boxes'][0]))
+            output_dict['num_detections'] = num_detections
+        elif 'num_detections' in output_dict:
+            num_detections = int(output_dict.pop('num_detections')[0])
+            output_dict = {key: value[0, :num_detections] for key, value in output_dict.items()}
+            output_dict['num_detections'] = num_detections
+        
+        # Convert detection classes to integers
+        if 'detection_classes' in output_dict:
+            output_dict['detection_classes'] = output_dict['detection_classes'].astype(np.int64)
+        
+        return output_dict
+    
+    def _process_frame(self, frame):
+        """
+        Process a single frame to detect food items.
+        
+        Args:
+            frame: Input frame from camera
+            
+        Returns:
+            List of DetectionResult objects
+        """
+        # Resize image if needed
+        image_np = cv2.resize(frame, (640, 480))
+        
+        # Convert BGR to RGB (TensorFlow models expect RGB)
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+        
+        # Run inference
+        output_dict = self._run_inference_for_single_image(image_np)
+        
+        # Process results
+        results = []
+        
+        # Check if we have detection results
+        if 'detection_classes' not in output_dict or 'detection_scores' not in output_dict:
+            return results
+            
+        for i in range(min(output_dict['num_detections'], len(output_dict['detection_classes']))):
+            confidence = output_dict['detection_scores'][i]
+            
+            # Skip low confidence detections
+            if confidence < self.confidence_threshold:
+                continue
+            
+            # Get class and box coordinates
+            class_id = output_dict['detection_classes'][i]
+            
+            # First check if this is a recognized food ingredient
+            ingredient_name = None
+            if class_id in FOOD_INGREDIENT_MAPPING:
+                ingredient_name = FOOD_INGREDIENT_MAPPING[class_id]
+            # Otherwise, use the standard class mapping just for visualization
+            elif class_id in FOOD_CLASS_MAPPING:
+                class_name = FOOD_CLASS_MAPPING[class_id]
+                # Skip non-food items for order verification
+                continue
+            else:
+                # Skip unknown classes
+                continue
+                
+            # We only proceed if we mapped to a food ingredient
+            if ingredient_name is None:
+                continue
+                
+            # Get bounding box (normalized)
+            box = output_dict['detection_boxes'][i]
+            
+            # Convert normalized coordinates to pixel coordinates
+            height, width, _ = image_np.shape
+            y1, x1, y2, x2 = box
+            
+            x = int(x1 * width)
+            y = int(y1 * height)
+            w = int((x2 - x1) * width)
+            h = int((y2 - y1) * height)
+            
+            result = DetectionResult(
+                class_id=class_id,
+                class_name=ingredient_name,
+                confidence=confidence,
+                box=(x, y, w, h)
+            )
+            
+            results.append(result)
+        
+        return results
+    
+    def _process_frames_thread(self):
+        """Background thread for processing frames."""
+        logger.info("Processing thread started")
+        
+        while self.is_running:
+            try:
+                # Get a frame from the queue with a timeout
+                frame = self.frame_queue.get(timeout=1.0)
+                
+                # Process the frame
+                results = self._process_frame(frame)
+                
+                # Put results in the output queue
+                self.result_queue.put((frame, results))
+                
+                # Mark the task as done
+                self.frame_queue.task_done()
+                
+            except queue.Empty:
+                # No frame available, continue
+                continue
+            except Exception as e:
+                logger.error(f"Error processing frame: {e}")
+        
+        logger.info("Processing thread stopped")
+    
+    def start(self):
+        """Start the detector processing thread."""
+        if self.is_running:
+            return
+        
+        self.is_running = True
+        self.processing_thread = threading.Thread(
+            target=self._process_frames_thread,
+            daemon=True
+        )
+        self.processing_thread.start()
+    
+    def stop(self):
+        """Stop the detector processing thread."""
+        self.is_running = False
+        
+        if self.processing_thread:
+            self.processing_thread.join(timeout=2.0)
+            self.processing_thread = None
+    
+    def process_frame(self, frame):
+        """
+        Add a frame to the processing queue.
+        
+        Args:
+            frame: Input frame from camera
+            
+        Returns:
+            True if frame was added to queue, False otherwise
+        """
+        if not self.is_running:
+            return False
+        
+        try:
+            # Try to add the frame to the queue without blocking
+            self.frame_queue.put_nowait(frame.copy())
+            return True
+        except queue.Full:
+            # Queue is full, skip this frame
+            return False
+    
+    def get_results(self):
+        """
+        Get the latest detection results.
+        
+        Returns:
+            Tuple of (frame, list of DetectionResult objects) or None if no results available
+        """
+        try:
+            # Try to get results without blocking
+            return self.result_queue.get_nowait()
+        except queue.Empty:
+            # No results available
+            return None
+    
+    def check_violations(self, results, order_item):
+        """
+        Check detection results against order specifications for violations.
+        
+        Args:
+            results: List of DetectionResult objects
+            order_item: OrderItem object containing requirements
+            
+        Returns:
+            Tuple of (set of violations, bool indicating if verification is complete)
+        """
+        if not results:
+            return set(), False
+        
+        # Extract detected ingredients
+        detected_ingredients = {result.class_name for result in results}
+        
+        # Check for violations (forbidden ingredients)
+        violations = set()
+        for forbidden in order_item.forbidden_ingredients:
+            if forbidden in detected_ingredients:
+                violations.add(forbidden)
+        
+        # Check if all required ingredients are present
+        missing_required = set()
+        for required in order_item.required_ingredients:
+            if required not in detected_ingredients:
+                missing_required.add(required)
+        
+        # Consider verification complete when all required ingredients are present
+        # In a real system, you would have a more sophisticated completion check
+        verification_complete = (len(missing_required) == 0)
+        
+        return violations, verification_complete
+
+    def annotate_frame(self, frame, results, violations=None):
+        """
+        Annotate a frame with detection results and violations.
+        
+        Args:
+            frame: Input frame
+            results: List of DetectionResult objects
+            violations: Set of ingredients that violate the order requirements
+            
+        Returns:
+            Annotated frame
+        """
+        if violations is None:
+            violations = set()
+        
+        # Create a copy of the frame
+        annotated_frame = frame.copy()
+        
+        # Draw detection boxes and labels
+        for result in results:
+            x, y, w, h = result.box
+            
+            # Determine color (red for violations, green for valid ingredients)
+            if result.class_name in violations:
+                color = (0, 0, 255)  # Red (BGR)
+            else:
+                color = (0, 255, 0)  # Green (BGR)
+            
+            # Draw bounding box
+            cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
+            
+            # Prepare label text
+            text = f"{result.class_name} ({result.confidence:.2f})"
+            
+            # Draw background for text
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            cv2.rectangle(
+                annotated_frame,
+                (x, y - text_size[1] - 10),
+                (x + text_size[0], y),
+                color,
+                -1
+            )
+            
+            # Draw label text
+            cv2.putText(
+                annotated_frame,
+                text,
+                (x, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 0),  # Black text
+                2
+            )
+        
+        # Draw violation warning if any violations exist
+        if violations:
+            warning_text = "VIOLATIONS DETECTED!"
+            cv2.putText(
+                annotated_frame,
+                warning_text,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 255),  # Red
+                2
+            )
+            
+            # List the violations
+            y_offset = 60
+            for violation in violations:
+                cv2.putText(
+                    annotated_frame,
+                    f"- {violation} should not be present",
+                    (20, y_offset),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 0, 255),  # Red
+                    2
+                )
+                y_offset += 25
+        
+        return annotated_frame

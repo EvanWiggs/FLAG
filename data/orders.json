@@ -1,0 +1,55 @@
+{
+  "ORD-1001": {
+    "order_id": "ORD-1001",
+    "customer_name": "John Doe",
+    "items": [
+      {
+        "item_id": "ITEM-1",
+        "name": "Chicken Sandwich",
+        "required_ingredients": [
+          "lettuce",
+          "chicken",
+          "bread"
+        ],
+        "forbidden_ingredients": [
+          "onion",
+          "pickle"
+        ]
+      },
+      {
+        "item_id": "ITEM-2",
+        "name": "French Fries",
+        "required_ingredients": [
+          "potato"
+        ],
+        "forbidden_ingredients": [
+          "salt"
+        ]
+      }
+    ],
+    "timestamp": "2025-03-26T23:06:24.654303",
+    "status": "new"
+  },
+  "ORD-1002": {
+    "order_id": "ORD-1002",
+    "customer_name": "Jane Smith",
+    "items": [
+      {
+        "item_id": "ITEM-3",
+        "name": "Beef Burger",
+        "required_ingredients": [
+          "tomato",
+          "lettuce",
+          "beef",
+          "bread"
+        ],
+        "forbidden_ingredients": [
+          "cheese",
+          "pickle"
+        ]
+      }
+    ],
+    "timestamp": "2025-03-26T23:06:24.654303",
+    "status": "new"
+  }
+}

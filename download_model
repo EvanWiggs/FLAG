@@ -1,0 +1,67 @@
+import os
+import urllib.request
+import zipfile
+import time
+
+print("Starting direct model download...")
+
+# Create directory
+model_dir = "models"
+os.makedirs(model_dir, exist_ok=True)
+
+# URL to a pre-trained SSD MobileNet model
+model_url = "http://download.tensorflow.org/models/object_detection/tf2/20200711/ssd_mobilenet_v2_320x320_coco17_tpu-8.tar.gz"
+download_path = os.path.join(model_dir, "ssd_mobilenet_v2.tar.gz")
+
+# Download the model
+print(f"Downloading from {model_url}")
+print("This may take a few minutes...")
+
+try:
+    # Show progress during download
+    def report_progress(block_num, block_size, total_size):
+        downloaded = block_num * block_size
+        percent = min(int(downloaded * 100 / total_size), 100)
+        if percent % 10 == 0:
+            print(f"Downloaded {percent}%")
+        
+    # Download with progress reporting
+    urllib.request.urlretrieve(model_url, download_path, report_progress)
+    
+    print("Download complete. Extracting...")
+    
+    # Extract the tar.gz file
+    import tarfile
+    with tarfile.open(download_path, "r:gz") as tar:
+        tar.extractall(path=model_dir)
+    
+    # Move files to the expected location
+    extracted_dir = os.path.join(model_dir, "ssd_mobilenet_v2_320x320_coco17_tpu-8", "saved_model")
+    target_dir = os.path.join(model_dir, "efficientdet_lite0_food")
+    
+    # Remove target directory if it exists
+    import shutil
+    if os.path.exists(target_dir):
+        shutil.rmtree(target_dir)
+    
+    # Move the extracted model to the target directory
+    shutil.move(extracted_dir, target_dir)
+    
+    # Clean up
+    os.remove(download_path)
+    shutil.rmtree(os.path.join(model_dir, "ssd_mobilenet_v2_320x320_coco17_tpu-8"))
+    
+    print(f"Model extracted and moved to {target_dir}")
+    
+    # Verify the saved_model.pb file exists
+    expected_file = os.path.join(target_dir, "saved_model.pb")
+    if os.path.exists(expected_file):
+        print(f"Success! {expected_file} exists")
+    else:
+        print(f"Warning: {expected_file} does not exist")
+    
+except Exception as e:
+    print(f"Error: {e}")
+    print("Download failed. Please check your internet connection.")
+
+print("Process complete.")
