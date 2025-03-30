@@ -30,6 +30,29 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def setup_gpu():
+    """Configure TensorFlow to use GPU properly"""
+    import tensorflow as tf
+    
+    # List available GPUs
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("No GPU found. Using CPU for inference.")
+        return False
+    
+    # Configure TensorFlow to use all available GPU memory
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"GPU enabled successfully: {len(gpus)} GPUs available")
+        return True
+    except RuntimeError as e:
+        print(f"GPU configuration error: {e}")
+        return False
+
+# Call this function early
+setup_gpu()
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Food Order Verification System')

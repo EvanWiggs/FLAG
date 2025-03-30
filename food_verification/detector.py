@@ -100,22 +100,32 @@ class FoodDetector:
         try:
             logger.info(f"Loading model from {self.model_path}")
             
-            # Load model with TensorFlow 2.19.0 approach
-            # This should work with the SSD MobileNet model
-            self.model = tf.saved_model.load(self.model_path)
+            # Force TensorFlow to use GPU
+            with tf.device('/GPU:0'):
+                # Load model with TensorFlow 2.19.0 approach
+                self.model = tf.saved_model.load(self.model_path)
+                
+                # Set up the detection function
+                self.detect_fn = self.model.signatures['serving_default']
+                
+                # Test with a dummy image to ensure it's working
+                logger.info("Testing model with dummy image...")
+                dummy_image = np.zeros((300, 300, 3), dtype=np.uint8)
+                self._run_inference_for_single_image(dummy_image)
             
-            # Set up the detection function
-            self.detect_fn = self.model.signatures['serving_default']
-            
-            # Test with a dummy image to ensure it's working
-            logger.info("Testing model with dummy image...")
-            dummy_image = np.zeros((300, 300, 3), dtype=np.uint8)
-            self._run_inference_for_single_image(dummy_image)
-            
-            logger.info("Model loaded successfully")
+            logger.info("Model loaded successfully on GPU")
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            raise
+            logger.error(f"Failed to load model on GPU: {e}")
+            
+            # Fall back to CPU if GPU fails
+            logger.info("Attempting to load model on CPU instead")
+            try:
+                self.model = tf.saved_model.load(self.model_path)
+                self.detect_fn = self.model.signatures['serving_default']
+                logger.info("Model loaded successfully on CPU")
+            except Exception as e:
+                logger.error(f"Failed to load model: {e}")
+                raise
     
     def _download_model(self):
         """Download the model if it doesn't exist."""
@@ -139,8 +149,14 @@ class FoodDetector:
         # Add batch dimension
         input_tensor = input_tensor[tf.newaxis, ...]
         
-        # Run inference
-        detection_output = self.detect_fn(input_tensor)
+        # Run inference on GPU if available
+        with tf.device('/GPU:0'):
+            try:
+                # Run inference
+                detection_output = self.detect_fn(input_tensor)
+            except RuntimeError:
+                # Fall back to CPU if GPU fails
+                detection_output = self.detect_fn(input_tensor)
         
         # Create a dictionary with the expected format
         output_dict = {}

@@ -118,7 +118,7 @@ FOOD_INGREDIENT_MAPPING = {
     15: 'chicken',      # COCO: bird → ingredient: chicken (for demo)
     73: 'pickle',       # COCO: refrigerator → ingredient: pickle (for demo)
     76: 'onion',        # COCO: vase → ingredient: onion (for demo)
-    22: 'lettuce',      # COCO: bear → ingredient: lettuce (for demo)
+    68: 'lettuce',      # COCO: bear → ingredient: lettuce (for demo)
     24: 'tomato',       # COCO: giraffe → ingredient: tomato (for demo)
     1: 'cheese',        # COCO: person → ingredient: cheese (for demo)
 }

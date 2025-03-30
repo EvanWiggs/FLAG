@@ -205,6 +205,10 @@ class VideoFrame(ttk.Frame):
         
         last_fps_update = time.time()
         
+        # Use a frame counter to control detection frequency
+        frame_counter = 0
+        detection_frequency = 3  # Only process every 3rd frame
+        
         while self.is_running:
             try:
                 # Grab a frame from the camera
@@ -212,70 +216,56 @@ class VideoFrame(ttk.Frame):
                 
                 if not ret or frame is None:
                     logger.warning("Failed to read frame from camera")
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                     continue
                 
                 # Store original frame
                 self.frame = frame.copy()
                 
-                # Send frame for processing
-                self.detector.process_frame(frame)
-                
-                # Get latest results
-                result = self.detector.get_results()
-                
-                if result:
-                    processed_frame, detections = result
-                    
-                    # Check for violations
-                    active_item = self.order_manager.get_active_item()
-                    if active_item:
-                        violations, _ = self.detector.check_violations(detections, active_item)
-                        self.violations = violations
-                        
-                        # Annotate the processed frame
-                        annotated_frame = self.detector.annotate_frame(
-                            processed_frame,
-                            detections,
-                            violations
-                        )
-                        
-                        # Update the UI with the processed frame
-                        self._update_image(annotated_frame)
-                    else:
-                        # Just show detections without checking violations
-                        annotated_frame = self.detector.annotate_frame(
-                            processed_frame,
-                            detections
-                        )
-                        
-                        # Update the UI with the processed frame
-                        self._update_image(annotated_frame)
-                else:
-                    # No detection results yet, show the original frame
+                # Always display the raw frame for smooth video
+                if frame_counter % detection_frequency != 0:
                     self._update_image(frame)
                 
-                # Update frame count and FPS
-                self.frame_count += 1
-                current_time = time.time()
+                # Only process every Nth frame for detection
+                if frame_counter % detection_frequency == 0:
+                    # Process directly in this thread for lower latency
+                    # This is faster than queueing but might affect smoothness slightly
+                    try:
+                        # Use a smaller image for faster processing
+                        small_frame = cv2.resize(frame, (320, 240))
+                        results = self.detector._process_frame(small_frame)
+                        
+                        # Check for violations
+                        active_item = self.order_manager.get_active_item()
+                        if active_item:
+                            violations, _ = self.detector.check_violations(results, active_item)
+                            self.violations = violations
+                            
+                            # Annotate the frame
+                            annotated_frame = self.detector.annotate_frame(frame, results, violations)
+                            self._update_image(annotated_frame)
+                    except Exception as e:
+                        logger.error(f"Error processing frame: {e}")
+                        self._update_image(frame)  # Fall back to raw frame
                 
-                # Update FPS display every second
+                # Update frame counter
+                frame_counter = (frame_counter + 1) % 1000  # Reset after 1000 to avoid overflow
+                
+                # Update FPS stats
+                current_time = time.time()
+                self.frame_count += 1
                 if current_time - last_fps_update >= 1.0:
                     self.fps = self.frame_count / (current_time - last_fps_update)
                     self.frame_count = 0
                     last_fps_update = current_time
-                    
-                    # Update FPS label in UI thread
                     self.after(0, lambda: self.fps_label.config(text=f"FPS: {self.fps:.1f}"))
                 
-                # Sleep to limit update rate
-                time.sleep(0.01)
+                # Very minimal sleep to prevent CPU hogging
+                time.sleep(0.001)
                 
             except Exception as e:
                 logger.error(f"Error in video update thread: {e}")
-                time.sleep(0.1)
-        
-        logger.info("Video update thread stopped")
+                time.sleep(0.01)
     
     def _update_image(self, frame):
         """Update the image displayed in the UI."""

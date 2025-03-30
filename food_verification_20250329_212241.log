@@ -1,0 +1,15 @@
+2025-03-29 21:22:41,982 - __main__ - INFO - Starting Food Order Verification System
+2025-03-29 21:22:41,989 - food_verification.order_manager - INFO - Loaded 2 orders from data/orders.json
+2025-03-29 21:22:41,990 - food_verification.detector - INFO - Loading model from C:\Users\tprwi\OneDrive\Desktop\OU\NVD\models\efficientdet_lite0_food
+2025-03-29 21:22:48,509 - absl - INFO - Fingerprint not found. Saved model loading will continue.
+2025-03-29 21:22:48,510 - absl - INFO - path_and_singleprint metric could not be logged. Saved model loading will continue.
+2025-03-29 21:22:48,510 - food_verification.detector - INFO - Testing model with dummy image...
+2025-03-29 21:22:50,787 - food_verification.detector - INFO - Model loaded successfully on GPU
+2025-03-29 21:23:23,447 - food_verification.detector - INFO - Processing thread started
+2025-03-29 21:23:23,447 - food_verification.ui - INFO - Video update thread started
+2025-03-29 21:23:23,447 - food_verification.ui - INFO - Started camera 0
+2025-03-29 21:23:51,697 - food_verification.detector - INFO - Processing thread stopped
+2025-03-29 21:23:53,978 - food_verification.ui - INFO - Stopped camera
+2025-03-29 21:23:53,979 - food_verification.order_manager - INFO - Saved 2 orders to data/orders.json
+2025-03-29 21:23:54,023 - food_verification.ui - INFO - Application exited normally
+2025-03-29 21:23:54,023 - __main__ - INFO - Application exited normally
