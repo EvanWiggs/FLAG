@@ -133,6 +133,8 @@ class VideoFrame(ttk.Frame):
             self.stop_button.config(state=tk.NORMAL)
             self.capture_button.config(state=tk.NORMAL)
             self.status_label.config(text="Camera running", foreground="green")
+            self.fps_label.config(text=f"FPS: {self.fps:.1f}")
+
             
             # Start update thread
             self.update_thread = threading.Thread(
@@ -200,73 +202,70 @@ class VideoFrame(ttk.Frame):
             logger.error(f"Failed to save frame: {e}")
     
     def _update_thread(self):
-        """Background thread for updating video frames."""
         logger.info("Video update thread started")
-        
         last_fps_update = time.time()
-        
-        # Use a frame counter to control detection frequency
         frame_counter = 0
-        detection_frequency = 3  # Only process every 3rd frame
+        detection_frequency = 3  # How often to submit frames for detection
         
         while self.is_running:
             try:
-                # Grab a frame from the camera
+                # 1. Capture frame
                 ret, frame = self.cap.read()
-                
-                if not ret or frame is None:
-                    logger.warning("Failed to read frame from camera")
+                if not ret:
                     time.sleep(0.01)
                     continue
                 
-                # Store original frame
+                # Store the current frame for capture and display
                 self.frame = frame.copy()
                 
-                # Always display the raw frame for smooth video
-                if frame_counter % detection_frequency != 0:
-                    self._update_image(frame)
-                
-                # Only process every Nth frame for detection
-                if frame_counter % detection_frequency == 0:
-                    # Process directly in this thread for lower latency
-                    # This is faster than queueing but might affect smoothness slightly
-                    try:
-                        # Use a smaller image for faster processing
-                        small_frame = cv2.resize(frame, (320, 240))
-                        results = self.detector._process_frame(small_frame)
-                        
-                        # Check for violations
-                        active_item = self.order_manager.get_active_item()
-                        if active_item:
-                            violations, _ = self.detector.check_violations(results, active_item)
-                            self.violations = violations
-                            
-                            # Annotate the frame
-                            annotated_frame = self.detector.annotate_frame(frame, results, violations)
-                            self._update_image(annotated_frame)
-                    except Exception as e:
-                        logger.error(f"Error processing frame: {e}")
-                        self._update_image(frame)  # Fall back to raw frame
-                
-                # Update frame counter
-                frame_counter = (frame_counter + 1) % 1000  # Reset after 1000 to avoid overflow
-                
-                # Update FPS stats
+                # Update frame counter and FPS
+                frame_counter += 1
                 current_time = time.time()
-                self.frame_count += 1
-                if current_time - last_fps_update >= 1.0:
-                    self.fps = self.frame_count / (current_time - last_fps_update)
-                    self.frame_count = 0
-                    last_fps_update = current_time
-                    self.after(0, lambda: self.fps_label.config(text=f"FPS: {self.fps:.1f}"))
                 
-                # Very minimal sleep to prevent CPU hogging
-                time.sleep(0.001)
+                # Calculate FPS every second
+                if current_time - last_fps_update > 1.0:
+                    self.fps = frame_counter / (current_time - last_fps_update)
+                    # Update UI label on the main thread
+                    self.fps_label.config(text=f"FPS: {self.fps:.1f}")
+                    frame_counter = 0
+                    last_fps_update = current_time
+                
+                # 2. Submit frame for detection periodically
+                if frame_counter % detection_frequency == 0:
+                    # Create a copy for detection
+                    self.detector.process_frame(frame.copy())
+                
+                # 3. Try to get detection results
+                result = self.detector.get_results()
+                
+                # 4. Process and display results
+                if result:
+                    # Unpack the tuple
+                    result_frame, detection_results = result
+                    
+                    # Get current item and check for violations
+                    active_item = self.order_manager.get_active_item()
+                    if active_item:  # Make sure there's an active item
+                        violations, _ = self.detector.check_violations(detection_results, active_item)
+                        self.violations = violations
+                        
+                        # Annotate the CURRENT frame with detection results (not result_frame)
+                        annotated_frame = self.detector.annotate_frame(self.frame, detection_results, violations)
+                        self._update_image(annotated_frame)
+                    else:
+                        # No active item, just display frame
+                        self._update_image(self.frame)
+                else:
+                    # No detection results yet, just display frame
+                    self._update_image(self.frame)
+                
+                # Small delay to prevent hogging CPU
+                time.sleep(0.01)
                 
             except Exception as e:
-                logger.error(f"Error in video update thread: {e}")
-                time.sleep(0.01)
-    
+                logger.error(f"Error in update thread: {e}", exc_info=True)
+                time.sleep(0.1)  # Add delay on error
+
     def _update_image(self, frame):
         """Update the image displayed in the UI."""
         try:

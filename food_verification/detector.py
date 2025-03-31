@@ -199,12 +199,13 @@ class FoodDetector:
         
         Args:
             frame: Input frame from camera
-            
+                
         Returns:
             List of DetectionResult objects
         """
         # Resize image if needed
         image_np = cv2.resize(frame, (640, 480))
+        logger.info("Running inference on frame")
         
         # Convert BGR to RGB (TensorFlow models expect RGB)
         image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
@@ -250,14 +251,15 @@ class FoodDetector:
                 if 'detection_boxes' in output_dict:
                     box = output_dict['detection_boxes'][i]
                     
-                    # Convert normalized coordinates to pixel coordinates
-                    height, width, _ = image_np.shape
+                    # Extract normalized coordinates (TensorFlow outputs in format [y1, x1, y2, x2])
                     y1, x1, y2, x2 = box
                     
-                    x = int(x1 * width)
-                    y = int(y1 * height)
-                    w = int((x2 - x1) * width)
-                    h = int((y2 - y1) * height)
+                    # Convert to [x, y, w, h] format but KEEP NORMALIZED (0-1)
+                    # This will be converted to pixel coordinates in the annotate_frame method
+                    x = float(x1)
+                    y = float(y1)
+                    w = float(x2 - x1)
+                    h = float(y2 - y1)
                     
                     # Create and add detection result
                     result = DetectionResult(
@@ -282,6 +284,7 @@ class FoodDetector:
             try:
                 # Get a frame from the queue with a timeout
                 frame = self.frame_queue.get(timeout=1.0)
+                
                 
                 # Process the frame
                 results = self._process_frame(frame)
@@ -350,7 +353,9 @@ class FoodDetector:
         """
         try:
             # Try to get results without blocking
-            return self.result_queue.get_nowait()
+            result = self.result_queue.get_nowait()
+            self.result_queue.task_done()  # Mark as done
+            return result  # This should already be a tuple of (frame, results)
         except queue.Empty:
             # No results available
             return None
@@ -408,9 +413,21 @@ class FoodDetector:
         # Create a copy of the frame
         annotated_frame = frame.copy()
         
+        # Get the dimensions of the frame
+        frame_height, frame_width = annotated_frame.shape[:2]
+        
         # Draw detection boxes and labels
         for result in results:
+            # Get the original coordinates
             x, y, w, h = result.box
+            
+            # Check if coordinates are normalized (between 0-1)
+            # If so, convert to pixel coordinates for the current frame
+            if 0 <= x <= 1 and 0 <= y <= 1 and 0 <= w <= 1 and 0 <= h <= 1:
+                x = int(x * frame_width)
+                y = int(y * frame_height)
+                w = int(w * frame_width)
+                h = int(h * frame_height)
             
             # Determine color (red for violations, green for valid ingredients)
             if result.class_name in violations:
@@ -418,18 +435,33 @@ class FoodDetector:
             else:
                 color = (0, 255, 0)  # Green (BGR)
             
+            # Ensure coordinates are within frame boundaries
+            x = max(0, min(x, frame_width - 1))
+            y = max(0, min(y, frame_height - 1))
+            w = max(1, min(w, frame_width - x))
+            h = max(1, min(h, frame_height - y))
+            
             # Draw bounding box
-            cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
+            cv2.rectangle(
+                annotated_frame, 
+                (x, y), 
+                (x + w, y + h), 
+                color, 
+                2
+            )
             
             # Prepare label text
             text = f"{result.class_name} ({result.confidence:.2f})"
             
             # Draw background for text
             text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            text_x = max(0, min(x, frame_width - text_size[0]))
+            text_y = max(text_size[1] + 10, y)
+            
             cv2.rectangle(
                 annotated_frame,
-                (x, y - text_size[1] - 10),
-                (x + text_size[0], y),
+                (text_x, text_y - text_size[1] - 10),
+                (text_x + text_size[0], text_y),
                 color,
                 -1
             )
@@ -438,7 +470,7 @@ class FoodDetector:
             cv2.putText(
                 annotated_frame,
                 text,
-                (x, y - 5),
+                (text_x, text_y - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (0, 0, 0),  # Black text

@@ -18,6 +18,9 @@ from food_verification.ui import Application
 from food_verification.order_manager import OrderManager
 from food_verification.detector import FoodDetector
 
+import tensorflow as tf
+print(tf.config.list_physical_devices('GPU'))
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

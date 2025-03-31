@@ -7,9 +7,9 @@
         "item_id": "ITEM-1",
         "name": "Chicken Sandwich",
         "required_ingredients": [
-          "chicken",
+          "lettuce",
           "bread",
-          "lettuce"
+          "chicken"
         ],
         "forbidden_ingredients": [
           "pickle",
@@ -38,14 +38,14 @@
         "item_id": "ITEM-3",
         "name": "Beef Burger",
         "required_ingredients": [
+          "lettuce",
           "beef",
           "bread",
-          "tomato",
-          "lettuce"
+          "tomato"
         ],
         "forbidden_ingredients": [
-          "cheese",
-          "pickle"
+          "pickle",
+          "cheese"
         ]
       }
     ],
